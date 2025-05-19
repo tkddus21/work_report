@@ -114,11 +114,12 @@ class TrackBotApp(QMainWindow):
             for j in range(3):  # 각 버퍼당 3개의 이미지
                 setattr(self, f"image{j+1}_{i}", [None, False])
 
-        # 병합 버퍼 초기화
+        # 병합 버퍼 초기화 (self.image_data 형식으로 통일)
+        # [시작 offset, 전체길이, 중간 이미지 인덱스, 사용가능여부, Numpy array]
         self.merged_buffers = [
-            {"images": [None, None, None], "pixmap": None, "valid": False, "start_idx": 0, "start_offset": 0},
-            {"images": [None, None, None], "pixmap": None, "valid": False, "start_idx": 0, "start_offset": 0},
-            {"images": [None, None, None], "pixmap": None, "valid": False, "start_idx": 0, "start_offset": 0},
+            [0, 0, 0, False, None],  # 이전 버퍼 (0,1,2)
+            [0, 0, 0, False, None],  # 현재 버퍼 (1,2,3)
+            [0, 0, 0, False, None]   # 다음 버퍼 (2,3,4)
         ]
         self.current_buffer_index = 1  # 가운데 버퍼가 현재
         self.middle_idx = 1            # 현재 기준 인덱스
@@ -188,25 +189,23 @@ class TrackBotApp(QMainWindow):
         # 시작 offset, 전체길이, 중간 이미지 인덱스, 사용가능여부, Numpy array
         mdx = 1 # 중간 이미지 인덱스
 
-        self.image_data[0] = inspection_config[mdx-1][4] # 첫번째 사진의 total_length
-        self.image_data[1] = inspection_config[mdx-1][3] + inspection_config[mdx][3] + inspection_config[mdx+1][3]
-        self.image_data[2] = mdx
-
-        # 초기 버퍼 설정
-        self.merged_buffers[0]["valid"] = False  # 이전 버퍼는 처음에 없음
-        self.merged_buffers[1]["start_idx"] = mdx - 1
-        self.merged_buffers[1]["start_offset"] = inspection_config[mdx-1][4]
-        self.merged_buffers[2]["start_idx"] = mdx + 1
-        self.merged_buffers[2]["start_offset"] = inspection_config[mdx+1][4]
+        # 초기 버퍼 설정 # data : image_name,image_path,distance_m,length_pix,total_length
+        self.merged_buffers[0][3] = False  # 이전 버퍼는 처음에 없음
+        self.merged_buffers[1][0] = inspection_config[mdx-1][4]  # 시작 offset
+        self.merged_buffers[1][1] = sum(inspection_config[i][3] for i in range(mdx-1, mdx+2))  # 전체 길이
+        self.merged_buffers[1][2] = mdx  # 중간 이미지 인덱스
+        self.merged_buffers[2][0] = inspection_config[mdx][4]  # 시작 offset
+        self.merged_buffers[2][1] = sum(inspection_config[i][3] for i in range(mdx, mdx+3))  # 전체 길이
+        self.merged_buffers[2][2] = mdx + 1  # 중간 이미지 인덱스
 
         # 현재 버퍼(1)와 다음 버퍼(2) 로드
         self.load_requested_image(mdx-1, target_attr="image1_1")
         self.load_requested_image(mdx, target_attr="image2_1")
         self.load_requested_image(mdx+1, target_attr="image3_1")
         
-        self.load_requested_image(mdx+1, target_attr="image1_2")
-        self.load_requested_image(mdx+2, target_attr="image2_2")
-        self.load_requested_image(mdx+3, target_attr="image3_2")
+        self.load_requested_image(mdx, target_attr="image1_2")
+        self.load_requested_image(mdx+1, target_attr="image2_2")
+        self.load_requested_image(mdx+2, target_attr="image3_2")
         
         # 병합 감시 스레드 시작
         self.start_merge_monitor_thread()
@@ -250,11 +249,11 @@ class TrackBotApp(QMainWindow):
             while not self.merged_done:
                 # 현재 버퍼의 이미지들이 모두 로드되었는지 확인
                 current_buffer = self.merged_buffers[self.current_buffer_index]
-                if current_buffer["valid"]:  # 이미 병합된 버퍼인 경우
+                if current_buffer[3]:  # 이미 병합된 버퍼인 경우
                     print("[🔁] 버퍼 이미지 로드 완료. 병합 시작.")
                     try:
                         self.merged_image = np.concatenate(
-                            current_buffer["images"],
+                            [getattr(self, f"image{i+1}_{j}")[0] for i in range(3) for j in range(3)],
                             axis=1
                         )
                         self.merged_done = True
@@ -269,8 +268,13 @@ class TrackBotApp(QMainWindow):
                         self.cached_pixmap = QPixmap.fromImage(qimg)
 
                         # 이미지 상태 플래그
-                        self.image_data[4] = self.cached_pixmap
-                        self.image_data[3] = True
+                        self.image_data = [
+                            self.inspection_config[self.middle_idx-1][4],
+                            self.inspection_config[self.middle_idx][3] + self.inspection_config[self.middle_idx+1][3],
+                            self.middle_idx,
+                            True,
+                            self.cached_pixmap
+                        ]
 
                     except Exception as e:
                         print(f"[❌] 병합 실패: {e}")
@@ -463,8 +467,11 @@ class TrackBotApp(QMainWindow):
         mid_image_length = self.inspection_config[mid_idx][3]
         mid_image_center_offset = mid_image_start + (mid_image_length // 2)
 
+        # 현재 버퍼의 중간 이미지 인덱스
+        current_mid_idx = self.merged_buffers[self.current_buffer_index][2]
+
         # 오른쪽으로 이동 (다음 이미지 중심 넘음)
-        if value >= mid_image_center_offset:
+        if value >= mid_image_center_offset and current_mid_idx == mid_idx:
             next_mid_idx = mid_idx + 1
             if next_mid_idx + 1 < len(self.inspection_config):  # 마지막 체크
                 print(f"[🔁 전환: {mid_idx} → {next_mid_idx}]")
@@ -480,35 +487,25 @@ class TrackBotApp(QMainWindow):
                 # 다음 버퍼(2)를 현재 버퍼(1)로 이동
                 self.merged_buffers[1] = self.merged_buffers[2].copy()
                 # 새로운 다음 버퍼(2) 준비
-                self.merged_buffers[2] = {
-                    "images": [None, None, None],
-                    "pixmap": None,
-                    "valid": False,
-                    "start_idx": next_mid_idx + 1,
-                    "start_offset": self.inspection_config[next_mid_idx + 1][4]
-                }
+                self.merged_buffers[2] = [0, 0, 0, False, None]
 
                 # image_data 갱신
-                self.image_data[0] = next_start_offset
-                self.image_data[1] = sum(self.inspection_config[i][3] for i in range(next_mid_idx - 1, next_mid_idx + 2))
-                self.image_data[2] = next_mid_idx
-                self.image_data[3] = False
-                self.image_data[4] = None
+                self.image_data = self.merged_buffers[1].copy()
 
                 def on_ready():
                     self.ui.horizontalScrollBar.blockSignals(True)
                     self.ui.horizontalScrollBar.setValue(int(new_value))
                     self.ui.horizontalScrollBar.blockSignals(False)
-                    if self.merged_buffers[1]["valid"]:
-                        start_x = new_value - next_start_offset
-                        self.display_pixmap_slice(self.merged_buffers[1]["pixmap"], start_x, self.viewer_width)
+                    if self.merged_buffers[1][3]:  # valid 체크
+                        start_x = new_value - self.merged_buffers[1][0]  # start_offset
+                        self.display_pixmap_slice(self.merged_buffers[1][4], start_x, self.viewer_width)
 
                 # 새로운 다음 버퍼 준비
                 self.build_merged_buffer(next_mid_idx + 1, 2, on_ready_callback=on_ready)
                 return
 
         # 왼쪽으로 이동 (이전 이미지 중심 넘음)
-        elif value < mid_image_start:
+        elif value < mid_image_start and current_mid_idx == mid_idx:
             prev_mid_idx = mid_idx - 1
             if prev_mid_idx - 1 >= 0:  # 첫 이미지 체크
                 print(f"[🔁 전환: {mid_idx} → {prev_mid_idx}]")
@@ -524,28 +521,18 @@ class TrackBotApp(QMainWindow):
                 # 이전 버퍼(0)를 현재 버퍼(1)로 이동
                 self.merged_buffers[1] = self.merged_buffers[0].copy()
                 # 새로운 이전 버퍼(0) 준비
-                self.merged_buffers[0] = {
-                    "images": [None, None, None],
-                    "pixmap": None,
-                    "valid": False,
-                    "start_idx": prev_mid_idx - 1,
-                    "start_offset": self.inspection_config[prev_mid_idx - 1][4]
-                }
+                self.merged_buffers[0] = [0, 0, 0, False, None]
 
                 # image_data 갱신
-                self.image_data[0] = prev_start_offset
-                self.image_data[1] = sum(self.inspection_config[i][3] for i in range(prev_mid_idx - 1, prev_mid_idx + 2))
-                self.image_data[2] = prev_mid_idx
-                self.image_data[3] = False
-                self.image_data[4] = None
+                self.image_data = self.merged_buffers[1].copy()
 
                 def on_ready():
                     self.ui.horizontalScrollBar.blockSignals(True)
                     self.ui.horizontalScrollBar.setValue(int(new_value))
                     self.ui.horizontalScrollBar.blockSignals(False)
-                    if self.merged_buffers[1]["valid"]:
-                        start_x = new_value - prev_start_offset
-                        self.display_pixmap_slice(self.merged_buffers[1]["pixmap"], start_x, self.viewer_width)
+                    if self.merged_buffers[1][3]:  # valid 체크
+                        start_x = new_value - self.merged_buffers[1][0]  # start_offset
+                        self.display_pixmap_slice(self.merged_buffers[1][4], start_x, self.viewer_width)
 
                 # 새로운 이전 버퍼 준비
                 self.build_merged_buffer(prev_mid_idx - 1, 0, on_ready_callback=on_ready)
@@ -606,17 +593,15 @@ class TrackBotApp(QMainWindow):
             qimg = QImage(merged.tobytes(), w, h, ch * w, QImage.Format_RGB888).rgbSwapped()
             qpixmap = QPixmap.fromImage(qimg)
 
-            self.merged_buffers[buffer_slot] = {
-                "images": imgs,
-                "pixmap": qpixmap,
-                "valid": True,
-                "start_idx": self.inspection_config[start_idx][4],
-                "start_offset": self.inspection_config[start_idx][4]
-            }
+            # 버퍼 정보 업데이트
+            self.merged_buffers[buffer_slot][0] = self.inspection_config[start_idx][4]  # 시작 offset
+            self.merged_buffers[buffer_slot][1] = sum(self.inspection_config[i][3] for i in range(start_idx, start_idx+3))  # 전체 길이
+            self.merged_buffers[buffer_slot][2] = start_idx + 1  # 중간 이미지 인덱스
+            self.merged_buffers[buffer_slot][3] = True  # 사용 가능
+            self.merged_buffers[buffer_slot][4] = qpixmap  # 이미지 데이터
 
             if buffer_slot == self.current_buffer_index:
-                self.image_data[3] = True
-                self.image_data[4] = qpixmap
+                self.image_data = self.merged_buffers[buffer_slot].copy()
 
             print(f"[✅ 병합 완료] 버퍼 {buffer_slot} : {start_idx} ~ {start_idx+2}")
 
@@ -629,12 +614,12 @@ class TrackBotApp(QMainWindow):
     def print_buffer_status(self):
         print("🧊 [버퍼 상태 요약]")
         for idx, buffer in enumerate(self.merged_buffers):
-            valid = buffer["valid"]
-            start_idx = buffer["start_idx"]
-            if valid and buffer["pixmap"] is not None:
-                w = buffer["pixmap"].width()
-                h = buffer["pixmap"].height()
-                print(f"  🔹 버퍼 {idx}: 유효 ✅ | 범위: {start_idx}~{start_idx+2} | 크기: {w}x{h}")
+            valid = buffer[3]
+            start_offset = buffer[0]
+            if valid and buffer[4] is not None:
+                w = buffer[4].width()
+                h = buffer[4].height()
+                print(f"  🔹 버퍼 {idx}: 유효 ✅ | 범위: {start_offset}~{start_offset+buffer[1]} | 크기: {w}x{h}")
             else:
                 print(f"  🔸 버퍼 {idx}: 유효 ❌ | 로드되지 않음")
 
