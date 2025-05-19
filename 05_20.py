@@ -471,7 +471,7 @@ class TrackBotApp(QMainWindow):
         current_mid_idx = self.merged_buffers[self.current_buffer_index][2]
 
         # 오른쪽으로 이동 (다음 이미지 중심 넘음)
-        if value >= mid_image_center_offset and current_mid_idx == mid_idx:
+        if value >= mid_image_center_offset + 1000 and current_mid_idx == mid_idx:
             next_mid_idx = mid_idx + 1
             if next_mid_idx + 1 < len(self.inspection_config):  # 마지막 체크
                 print(f"[🔁 전환: {mid_idx} → {next_mid_idx}]")
@@ -505,7 +505,7 @@ class TrackBotApp(QMainWindow):
                 return
 
         # 왼쪽으로 이동 (이전 이미지 중심 넘음)
-        elif value < mid_image_start and current_mid_idx == mid_idx:
+        elif value < mid_image_start - 1000 and current_mid_idx == mid_idx:
             prev_mid_idx = mid_idx - 1
             if prev_mid_idx - 1 >= 0:  # 첫 이미지 체크
                 print(f"[🔁 전환: {mid_idx} → {prev_mid_idx}]")
