@@ -349,7 +349,7 @@ class TrackBotApp(QMainWindow):
         # 수평 스크롤바 설정
         scrollbar = self.ui.horizontalScrollBar
         scrollbar.setMinimum(0)
-        scrollbar.setMaximum(total_pixels)
+        scrollbar.setMaximum(total_pixels - self.viewer_width)
 
         # 스크롤 이벤트 연결
         scrollbar.valueChanged.connect(self.on_scroll_changed)
@@ -701,7 +701,10 @@ class TrackBotApp(QMainWindow):
             # mid_idx = start_idx + 1
             # ⑦ 버퍼 메타데이터 계산
             start_offset = self.inspection_config[valid_indices[0]][4]
+            # 마지막 이미지의 전체 길이를 포함하도록 수정
             total_length = sum(self.inspection_config[i][3] for i in valid_indices)
+            if valid_indices[-1] == len(self.inspection_config) - 1:  # 마지막 이미지인 경우
+                total_length = self.inspection_config[valid_indices[-1]][4] + self.inspection_config[valid_indices[-1]][3] - start_offset
             mid_idx = valid_indices[len(valid_indices) // 2]  # 가운데 이미지
 
 
